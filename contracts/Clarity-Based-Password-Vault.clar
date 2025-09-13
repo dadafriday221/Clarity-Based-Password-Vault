@@ -6,6 +6,10 @@
 (define-constant err-already-exists (err u104))
 (define-constant err-insufficient-signatures (err u105))
 
+(define-constant err-vault-expired (err u106))
+(define-constant err-invalid-duration (err u107))
+(define-constant max-expiration-blocks u52560)
+
 (define-map vaults 
   { vault-id: uint }
   {
@@ -222,4 +226,80 @@
 
 (define-read-only (get-next-recovery-id)
   (var-get next-recovery-id)
+)
+
+
+
+(define-map vault-expiration
+  { vault-id: uint }
+  {
+    expires-at: uint,
+    expiration-duration: uint,
+    renewal-count: uint,
+    last-renewed: uint
+  }
+)
+
+(define-public (set-vault-expiration 
+  (vault-id uint)
+  (duration-blocks uint)
+)
+  (let
+    (
+      (vault-data (unwrap! (map-get? vaults { vault-id: vault-id }) err-not-found))
+      (current-block stacks-block-height)
+      (expires-at (+ current-block duration-blocks))
+    )
+    (asserts! (is-eq tx-sender (get owner vault-data)) err-unauthorized)
+    (asserts! (> duration-blocks u0) err-invalid-duration)
+    (asserts! (<= duration-blocks max-expiration-blocks) err-invalid-duration)
+    
+    (map-set vault-expiration
+      { vault-id: vault-id }
+      {
+        expires-at: expires-at,
+        expiration-duration: duration-blocks,
+        renewal-count: u0,
+        last-renewed: current-block
+      }
+    )
+    (ok expires-at)
+  )
+)
+
+(define-public (renew-vault (vault-id uint))
+  (let
+    (
+      (vault-data (unwrap! (map-get? vaults { vault-id: vault-id }) err-not-found))
+      (exp-data (unwrap! (map-get? vault-expiration { vault-id: vault-id }) err-not-found))
+      (current-block stacks-block-height)
+      (new-expires-at (+ current-block (get expiration-duration exp-data)))
+    )
+    (asserts! (is-eq tx-sender (get owner vault-data)) err-unauthorized)
+    
+    (map-set vault-expiration
+      { vault-id: vault-id }
+      (merge exp-data {
+        expires-at: new-expires-at,
+        renewal-count: (+ (get renewal-count exp-data) u1),
+        last-renewed: current-block
+      })
+    )
+    (ok new-expires-at)
+  )
+)
+
+(define-private (is-vault-expired (vault-id uint))
+  (match (map-get? vault-expiration { vault-id: vault-id })
+    exp-data (> stacks-block-height (get expires-at exp-data))
+    false
+  )
+)
+
+(define-read-only (get-vault-expiration (vault-id uint))
+  (map-get? vault-expiration { vault-id: vault-id })
+)
+
+(define-read-only (check-vault-expired (vault-id uint))
+  (is-vault-expired vault-id)
 )
