@@ -10,6 +10,10 @@
 (define-constant err-invalid-duration (err u107))
 (define-constant max-expiration-blocks u52560)
 
+(define-constant err-sharing-expired (err u108))
+(define-constant err-no-sharing-permission (err u109))
+(define-constant max-sharing-duration u10080)
+
 (define-map vaults 
   { vault-id: uint }
   {
@@ -302,4 +306,102 @@
 
 (define-read-only (check-vault-expired (vault-id uint))
   (is-vault-expired vault-id)
+)
+
+
+(define-map shared-access
+  { vault-id: uint, shared-with: principal }
+  {
+    granted-by: principal,
+    granted-at: uint,
+    expires-at: uint,
+    access-count: uint,
+    last-accessed: uint,
+    is-revoked: bool
+  }
+)
+
+(define-public (grant-access
+  (vault-id uint)
+  (share-with principal)
+  (duration-blocks uint)
+)
+  (let
+    (
+      (vault-data (unwrap! (map-get? vaults { vault-id: vault-id }) err-not-found))
+      (current-block stacks-block-height)
+      (expires-at (+ current-block duration-blocks))
+    )
+    (asserts! (is-eq tx-sender (get owner vault-data)) err-unauthorized)
+    (asserts! (> duration-blocks u0) err-invalid-duration)
+    (asserts! (<= duration-blocks max-sharing-duration) err-invalid-duration)
+    
+    (map-set shared-access
+      { vault-id: vault-id, shared-with: share-with }
+      {
+        granted-by: tx-sender,
+        granted-at: current-block,
+        expires-at: expires-at,
+        access-count: u0,
+        last-accessed: u0,
+        is-revoked: false
+      }
+    )
+    (ok expires-at)
+  )
+)
+
+(define-public (revoke-access
+  (vault-id uint)
+  (shared-with principal)
+)
+  (let
+    (
+      (vault-data (unwrap! (map-get? vaults { vault-id: vault-id }) err-not-found))
+      (share-data (unwrap! (map-get? shared-access { vault-id: vault-id, shared-with: shared-with }) err-not-found))
+    )
+    (asserts! (is-eq tx-sender (get owner vault-data)) err-unauthorized)
+    
+    (map-set shared-access
+      { vault-id: vault-id, shared-with: shared-with }
+      (merge share-data { is-revoked: true })
+    )
+    (ok true)
+  )
+)
+
+(define-public (access-shared-vault (vault-id uint))
+  (let
+    (
+      (vault-data (unwrap! (map-get? vaults { vault-id: vault-id }) err-not-found))
+      (share-data (unwrap! (map-get? shared-access { vault-id: vault-id, shared-with: tx-sender }) err-no-sharing-permission))
+      (current-block stacks-block-height)
+    )
+    (asserts! (not (get is-revoked share-data)) err-no-sharing-permission)
+    (asserts! (<= current-block (get expires-at share-data)) err-sharing-expired)
+    
+    (map-set shared-access
+      { vault-id: vault-id, shared-with: tx-sender }
+      (merge share-data {
+        access-count: (+ (get access-count share-data) u1),
+        last-accessed: current-block
+      })
+    )
+    (ok (get encrypted-hash vault-data))
+  )
+)
+
+(define-read-only (get-sharing-status (vault-id uint) (shared-with principal))
+  (map-get? shared-access { vault-id: vault-id, shared-with: shared-with })
+)
+
+(define-read-only (check-has-access (vault-id uint) (principal-check principal))
+  (match (map-get? shared-access { vault-id: vault-id, shared-with: principal-check })
+    share-data
+      (and
+        (not (get is-revoked share-data))
+        (<= stacks-block-height (get expires-at share-data))
+      )
+    false
+  )
 )
