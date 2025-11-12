@@ -405,3 +405,50 @@
     false
   )
 )
+
+(define-constant err-invalid-operation (err u110))
+
+(define-map vault-activity-log
+  { activity-id: uint }
+  {
+    vault-id: uint,
+    actor: principal,
+    operation-type: (string-ascii 20),
+    block-height: uint,
+    timestamp-approx: uint
+  }
+)
+
+(define-data-var next-activity-id uint u1)
+
+(define-private (log-activity 
+  (vault-id uint)
+  (operation-type (string-ascii 20))
+)
+  (let
+    (
+      (activity-id (var-get next-activity-id))
+      (current-block stacks-block-height)
+    )
+    (map-set vault-activity-log
+      { activity-id: activity-id }
+      {
+        vault-id: vault-id,
+        actor: tx-sender,
+        operation-type: operation-type,
+        block-height: current-block,
+        timestamp-approx: current-block
+      }
+    )
+    (var-set next-activity-id (+ activity-id u1))
+    (ok activity-id)
+  )
+)
+
+(define-read-only (get-activity-log (activity-id uint))
+  (map-get? vault-activity-log { activity-id: activity-id })
+)
+
+(define-read-only (get-vault-activity-count)
+  (- (var-get next-activity-id) u1)
+)
